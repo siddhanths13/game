@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>3D NPC Emoji Game with Gradient Sky</title>
+  <style>
+    body { margin:0; overflow:hidden; }
+    #hud {
+      position:absolute; top:10px; left:10px; 
+      background:rgba(0,0,0,0.6); color:white; padding:10px; border-radius:8px;
+      font-family: Arial, sans-serif;
+    }
+    button { margin:5px; padding:5px 10px; font-weight:bold; cursor:pointer; }
+  </style>
+</head>
+<body>
+<div id="hud">
+  <button id="restartBtn">Restart NPC</button>
+  <button id="clearBtn">Clear Blocks</button>
+  <div>Left click: place block (max 2)<br>Right click: remove last block</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+<script>
+let scene, camera, renderer;
+let npc, npcVelocity;
+let obstacles = [];
+let blocks = [];
+let npcAlive = true;
+
+// init scene
+scene = new THREE.Scene();
+camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// 🌌 Gradient background
+const skyGeo = new THREE.SphereGeometry(100, 32, 32);
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: {
+    topColor: { value: new THREE.Color(0x87ceeb) }, // light blue
+    bottomColor: { value: new THREE.Color(0x000000) }, // black
+  },
+  vertexShader: `
+    varying vec3 vWorldPosition;
+    void main() {
+      vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+      vWorldPosition = worldPosition.xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 topColor;
+    uniform vec3 bottomColor;
+    varying vec3 vWorldPosition;
+    void main() {
+      float h = normalize(vWorldPosition).y * 0.5 + 0.5;
+      gl_FragColor = vec4(mix(bottomColor, topColor, h), 1.0);
+    }
+  `,
+  side: THREE.BackSide,
+});
+const sky = new THREE.Mesh(skyGeo, skyMat);
+scene.add(sky);
+
+// lights
+const light = new THREE.PointLight(0xffffff, 1);
+light.position.set(20,20,20);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0x404040));
+
+// ground plane
+const planeGeo = new THREE.PlaneGeometry(50,50);
+const planeMat = new THREE.MeshPhongMaterial({color:0x222222});
+const plane = new THREE.Mesh(planeGeo, planeMat);
+plane.rotation.x = -Math.PI/2;
+scene.add(plane);
+
+// NPC = smiley sphere
+function createNPC(){
+  const npcGeo = new THREE.SphereGeometry(1,32,32);
+  const canvas = document.createElement("canvas");
+  canvas.width = 64; canvas.height=64;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "yellow";
+  ctx.fillRect(0,0,64,64);
+  ctx.fillStyle = "black";
+  ctx.beginPath(); ctx.arc(20,20,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(44,20,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(20,40,24,0,Math.PI); ctx.stroke();
+  const texture = new THREE.CanvasTexture(canvas);
+  const npcMat = new THREE.MeshPhongMaterial({map:texture});
+  const mesh = new THREE.Mesh(npcGeo, npcMat);
+  mesh.position.set(0,1,0);
+  return mesh;
+}
+npc = createNPC();
+scene.add(npc);
+npcVelocity = new THREE.Vector3((Math.random()-0.5)*0.2,0,(Math.random()-0.5)*0.2);
+
+// obstacles 🌵🔥
+function createObstacle(emoji, x,z){
+  const size=2;
+  const geo = new THREE.BoxGeometry(size,size,size);
+  const canvas = document.createElement("canvas");
+  canvas.width=64; canvas.height=64;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "white";
+  ctx.fillRect(0,0,64,64);
+  ctx.font="48px Arial";
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  ctx.fillText(emoji,32,32);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.MeshPhongMaterial({map:tex});
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x,1,z);
+  return mesh;
+}
+function spawnObstacles(){
+  const emojis=["🌵","🔥"];
+  for(let i=0;i<15;i++){
+    let x=(Math.random()-0.5)*40;
+    let z=(Math.random()-0.5)*40;
+    let emoji=emojis[Math.floor(Math.random()*emojis.length)];
+    const o = createObstacle(emoji,x,z);
+    scene.add(o);
+    obstacles.push(o);
+  }
+}
+spawnObstacles();
+
+// protective block
+function createBlock(x,z){
+  const geo = new THREE.BoxGeometry(2,2,2);
+  const mat = new THREE.MeshPhongMaterial({color:0x2b7bd6});
+  const mesh = new THREE.Mesh(geo,mat);
+  mesh.position.set(x,1,z);
+  return mesh;
+}
+
+// restart
+function restartNPC(){
+  npc.position.set(0,1,0);
+  npcVelocity.set((Math.random()-0.5)*0.2,0,(Math.random()-0.5)*0.2);
+  npcAlive=true;
+  npc.material.color.set(0xffffff);
+}
+document.getElementById("restartBtn").onclick=restartNPC;
+document.getElementById("clearBtn").onclick=()=>{blocks.forEach(b=>scene.remove(b)); blocks=[];};
+
+// mouse click => place block
+document.addEventListener("click",(e)=>{
+  const mouse = new THREE.Vector2(
+    (e.clientX/window.innerWidth)*2-1,
+    -(e.clientY/window.innerHeight)*2+1
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObject(plane);
+  if(intersects.length>0){
+    const p = intersects[0].point;
+    const newBlock = createBlock(Math.round(p.x), Math.round(p.z));
+    if(blocks.length>=2){ scene.remove(blocks.shift()); }
+    blocks.push(newBlock);
+    scene.add(newBlock);
+  }
+});
+
+// right click remove
+document.addEventListener("contextmenu",(e)=>{
+  e.preventDefault();
+  if(blocks.length>0){
+    const b = blocks.pop();
+    scene.remove(b);
+  }
+});
+
+// camera
+camera.position.set(0,20,25);
+camera.lookAt(0,0,0);
+
+// animate
+function animate(){
+  requestAnimationFrame(animate);
+
+  if(npcAlive){
+    npc.position.add(npcVelocity);
+    if(Math.abs(npc.position.x)>25) npcVelocity.x*=-1;
+    if(Math.abs(npc.position.z)>25) npcVelocity.z*=-1;
+    if(Math.random()<0.01){
+      npcVelocity.set((Math.random()-0.5)*0.3,0,(Math.random()-0.5)*0.3);
+    }
+    for(let o of obstacles){
+      if(npc.position.distanceTo(o.position)<2.5){
+        let covered=false;
+        for(let b of blocks){
+          if(b.position.distanceTo(o.position)<2) covered=true;
+        }
+        if(!covered){
+          npcAlive=false;
+          npc.material.color.set(0xff0000);
+        }
+      }
+    }
+  }
+  renderer.render(scene,camera);
+}
+animate();
+</script>
+</body>
+</html>
